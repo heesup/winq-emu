@@ -15,7 +15,55 @@ namespace WINQ_EMU
     {
         // --- State ---
         string qemuBinDir;
+        bool isArm64;   // true: qemu-system-aarch64 on 'virt' (Windows on ARM)
         List<PortForward> portForwards = new List<PortForward>();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool IsWow64Process2(IntPtr process, out ushort processMachine, out ushort nativeMachine);
+
+        const ushort IMAGE_FILE_MACHINE_ARM64 = 0xAA64;
+
+        // Native OS architecture, independent of whether this process itself
+        // runs under x64 emulation (an AnyCPU build does on ARM64).
+        static bool IsArm64Host()
+        {
+            try
+            {
+                ushort pm, nm;
+                if (IsWow64Process2(Process.GetCurrentProcess().Handle, out pm, out nm))
+                    return nm == IMAGE_FILE_MACHINE_ARM64;
+            }
+            catch (EntryPointNotFoundException) { }   // pre-1709 Windows
+            return false;
+        }
+
+        static bool HasAnyQemu(string dir)
+        {
+            return File.Exists(Path.Combine(dir, "qemu-system-x86_64.exe")) ||
+                   File.Exists(Path.Combine(dir, "qemu-system-aarch64.exe"));
+        }
+
+        // QEMU data dir (firmware, option ROMs, keymaps). The installer ships
+        // it as bin\share, while upstream/MSYS2 builds look in ..\share\qemu,
+        // so pass it explicitly with -L. Null when not found.
+        string FindDataDir()
+        {
+            foreach (var dir in new[] {
+                Path.Combine(qemuBinDir, "share"),
+                Path.Combine(qemuBinDir, "..", "share", "qemu") })
+            {
+                if (File.Exists(Path.Combine(dir, "edk2-aarch64-code.fd")))
+                    return Path.GetFullPath(dir);
+            }
+            return null;
+        }
+
+        // GUI-subsystem build (no console window) of the system emulator.
+        string QemuSystemExe()
+        {
+            return Path.Combine(qemuBinDir,
+                isArm64 ? "qemu-system-aarch64w.exe" : "qemu-system-x86_64w.exe");
+        }
         List<SharedFolder> sharedFolders = new List<SharedFolder>();
 
         // --- Controls ---
@@ -51,12 +99,15 @@ namespace WINQ_EMU
             // Find QEMU binary relative to this exe
             string exeDir = Path.GetDirectoryName(Application.ExecutablePath);
             qemuBinDir = Path.Combine(exeDir, "bin");
-            if (!File.Exists(Path.Combine(qemuBinDir, "qemu-system-x86_64.exe")))
-            {
-                // Try same directory
-                if (File.Exists(Path.Combine(exeDir, "qemu-system-x86_64.exe")))
-                    qemuBinDir = exeDir;
-            }
+            if (!HasAnyQemu(qemuBinDir) && HasAnyQemu(exeDir))
+                qemuBinDir = exeDir;   // Try same directory
+
+            // On a Windows-on-ARM host WHPX can only run aarch64 guests, so
+            // switch to qemu-system-aarch64 + the 'virt' machine when that
+            // binary is present (or when it is the only one shipped).
+            bool haveX86 = File.Exists(Path.Combine(qemuBinDir, "qemu-system-x86_64.exe"));
+            bool haveArm = File.Exists(Path.Combine(qemuBinDir, "qemu-system-aarch64.exe"));
+            isArm64 = haveArm && (IsArm64Host() || !haveX86);
 
             InitializeForm();
             InitializeVMTab();
@@ -616,7 +667,7 @@ namespace WINQ_EMU
             btnLoadBat.Height = 30;
 
             statusBar = new StatusStrip();
-            statusLabel = new ToolStripStatusLabel("Ready");
+            statusLabel = new ToolStripStatusLabel(isArm64 ? "Ready (ARM64 host: aarch64 guest)" : "Ready");
             statusBar.Items.Add(statusLabel);
             statusBar.Items.Add(new ToolStripStatusLabel("WINQ-EMU Alpha 10") {
                 Alignment = ToolStripItemAlignment.Right,
@@ -636,8 +687,21 @@ namespace WINQ_EMU
         List<string> BuildArgs()
         {
             var args = new List<string>();
-            args.Add("-machine q35,accel=whpx");
-            args.Add("-cpu host");
+            if (isArm64)
+            {
+                // aarch64 guests boot via UEFI only.
+                string dataDir = FindDataDir();
+                if (dataDir != null)
+                    args.Add("-L \"" + dataDir + "\"");
+                args.Add("-machine virt,accel=whpx");
+                args.Add("-cpu host");
+                args.Add("-bios edk2-aarch64-code.fd");
+            }
+            else
+            {
+                args.Add("-machine q35,accel=whpx");
+                args.Add("-cpu host");
+            }
 
             int cores;
             if (!int.TryParse(txtCores.Text, out cores) || cores < 1)
@@ -661,6 +725,8 @@ namespace WINQ_EMU
                 }
                 string iface = (row.Cells[2].Value ?? "virtio").ToString();
                 if (iface.Length == 0) iface = "virtio";
+                // 'virt' has no IDE bus and no default SCSI HBA.
+                if (isArm64) iface = "virtio";
                 args.Add("-drive file=\"" + path + "\",format=" + fmt + ",if=" + iface);
             }
 
@@ -674,16 +740,19 @@ namespace WINQ_EMU
                 case 2: args.Add("-boot n"); break;
             }
 
+            // No VGA on aarch64: virtio-vga-gl doesn't exist there; the UEFI
+            // firmware drives virtio-gpu directly through its GOP driver.
+            string gpuDev = isArm64 ? "virtio-gpu-gl-pci" : "virtio-vga-gl";
             if (chkVenus.Checked)
             {
                 int hostmem;
                 if (!int.TryParse(txtHostMem.Text, out hostmem) || hostmem < 1)
                     hostmem = 4;
-                args.Add("-device virtio-vga-gl,blob=on,hostmem=" + hostmem + "G,venus=on");
+                args.Add("-device " + gpuDev + ",blob=on,hostmem=" + hostmem + "G,venus=on");
             }
             else
             {
-                args.Add("-device virtio-vga-gl");
+                args.Add("-device " + gpuDev);
             }
 
             args.Add("-display sdl,gl=on");
@@ -708,7 +777,10 @@ namespace WINQ_EMU
                 args.Add("-netdev user,id=net0" + fwds);
             }
 
-            args.Add("-usb");
+            if (isArm64)
+                args.Add("-device qemu-xhci");   // 'virt' has no default USB controller
+            else
+                args.Add("-usb");
             args.Add("-device usb-tablet");
 
             // Folder sharing via virtio-9p.
@@ -732,7 +804,7 @@ namespace WINQ_EMU
 
         string BuildCommand(bool forBatchFile = false)
         {
-            string qemu = "\"" + Path.Combine(qemuBinDir, "qemu-system-x86_64w.exe") + "\"";
+            string qemu = "\"" + QemuSystemExe() + "\"";
 
             var args = BuildArgs();
             string sep = forBatchFile ? " ^\r\n  " : "\r\n  ";
@@ -900,7 +972,7 @@ namespace WINQ_EMU
 
             try
             {
-                string qemuExe = Path.Combine(qemuBinDir, "qemu-system-x86_64w.exe");
+                string qemuExe = QemuSystemExe();
                 string flatArgs = string.Join(" ", BuildArgs());
 
                 var psi = new ProcessStartInfo

@@ -108,6 +108,14 @@ Firefox and every non-Chromium consumer tested above work correctly.
    ```
    csc.exe /target:winexe /out:installer\WINQ-EMU.exe /win32icon:launcher\winq-emu.ico /r:System.Windows.Forms.dll /r:System.Drawing.dll launcher\WINQ-EMU.cs
    ```
+   **Windows on ARM64:** an AnyCPU build runs under x64 emulation there (it loads the `Framework64` CLR). For a native ARM64 launcher, build with the Roslyn `csc.exe` from Visual Studio / Build Tools (the .NET Framework `csc.exe` has no `arm64` platform). From the MSYS2 CLANGARM64 shell:
+   ```bash
+   MSYS2_ARG_CONV_EXCL='*' "/c/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/MSBuild/Current/Bin/Roslyn/csc.exe" \
+     /platform:arm64 /target:winexe /out:installer\\WINQ-EMU.exe /win32icon:launcher\\winq-emu.ico \
+     /r:'C:\Windows\Microsoft.NET\FrameworkArm64\v4.0.30319\System.Windows.Forms.dll' \
+     /r:'C:\Windows\Microsoft.NET\FrameworkArm64\v4.0.30319\System.Drawing.dll' launcher\\WINQ-EMU.cs
+   ```
+   (`MSYS2_ARG_CONV_EXCL='*'` stops MSYS2 from rewriting the `/flag` arguments as paths.) Note that the QEMU/virglrenderer side is still x86_64-only, so this covers the launcher only.
 4. **Collect DLLs** — copy all UCRT64 DLL dependencies into `installer\bin\`. Use `ldd qemu-system-x86_64.exe` from the UCRT64 shell to find them. Also copy `winq-emu.ico` into `installer\icons\` for the window icon.
 5. **Build the installer** (requires `mingw-w64-ucrt-x86_64-nsis`):
    ```bash
