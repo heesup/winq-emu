@@ -1,14 +1,29 @@
 ; WINQ-EMU Alpha 10 Installer
 ; Optimized QEMU for Windows with WHPX host CPU, Venus Vulkan GPU,
 ; 9p folder sharing, and VA-API video decode.
+;
+; Build:  makensis installer.nsi          -> x86_64 host installer
+;         makensis -DARM64 installer.nsi  -> Windows on ARM installer
+;                                            (bin\ staged by stage-arm64.sh)
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 !include "WordFunc.nsh"
+!include "x64.nsh"
+
+!ifdef ARM64
+  !define QEMU_SYSTEM "qemu-system-aarch64"
+  !define ARCH_LABEL " (ARM64)"
+  !define SETUP_SUFFIX "-ARM64"
+!else
+  !define QEMU_SYSTEM "qemu-system-x86_64"
+  !define ARCH_LABEL ""
+  !define SETUP_SUFFIX ""
+!endif
 
 ; ---- General ----
-Name "WINQ-EMU Alpha 10"
-OutFile "..\WINQ-EMU-Alpha10-Setup.exe"
+Name "WINQ-EMU Alpha 10${ARCH_LABEL}"
+OutFile "..\WINQ-EMU-Alpha10${SETUP_SUFFIX}-Setup.exe"
 InstallDir "C:\WINQ-EMU"
 InstallDirRegKey HKCU "Software\WINQ-EMU" "InstallDir"
 RequestExecutionLevel admin
@@ -51,14 +66,31 @@ Click Next to continue."
 
 !insertmacro MUI_LANGUAGE "English"
 
+; ---- Host architecture check ----
+; WHPX only accelerates guests of the host's own architecture, so an x86_64
+; build is useless on Windows on ARM (and vice versa).
+Function .onInit
+!ifdef ARM64
+    ${IfNot} ${IsNativeARM64}
+        MessageBox MB_ICONSTOP "This is the Windows on ARM (ARM64) build of WINQ-EMU.$\r$\n$\r$\nPlease use the x86_64 installer on this PC."
+        Abort
+    ${EndIf}
+!else
+    ${If} ${IsNativeARM64}
+        MessageBox MB_ICONSTOP "This is the x86_64 build of WINQ-EMU, which cannot use hardware acceleration on Windows on ARM.$\r$\n$\r$\nPlease use the ARM64 installer on this PC."
+        Abort
+    ${EndIf}
+!endif
+FunctionEnd
+
 ; ---- Installation ----
 Section "WINQ-EMU Core (required)" SecCore
     SectionIn RO
 
     ; Binaries and DLLs
     SetOutPath "$INSTDIR\bin"
-    File "bin\qemu-system-x86_64.exe"
-    File "bin\qemu-system-x86_64w.exe"
+    File "bin\${QEMU_SYSTEM}.exe"
+    File "bin\${QEMU_SYSTEM}w.exe"
     File "bin\qemu-img.exe"
     File "bin\libvirglrenderer-1.dll"
     File "bin\*.dll"
@@ -66,7 +98,13 @@ Section "WINQ-EMU Core (required)" SecCore
 
     ; Firmware (must be at bin\share\ for QEMU to find it)
     SetOutPath "$INSTDIR\bin\share"
+!ifdef ARM64
+    ; aarch64 guests boot via UEFI only (edk2-aarch64-code.fd)
+    File "bin\share\edk2-aarch64-code.fd"
+    File /nonfatal "bin\share\*.bin"
+!else
     File "bin\share\*.bin"
+!endif
     File "bin\share\*.rom"
     File /nonfatal "bin\share\*.fd"
 
@@ -98,7 +136,7 @@ Section "WINQ-EMU Core (required)" SecCore
     ; Write registry keys (per-user)
     WriteRegStr HKCU "Software\WINQ-EMU" "InstallDir" "$INSTDIR"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WINQ-EMU" \
-                     "DisplayName" "WINQ-EMU Alpha 10"
+                     "DisplayName" "WINQ-EMU Alpha 10${ARCH_LABEL}"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WINQ-EMU" \
                      "UninstallString" '"$INSTDIR\uninstall.exe"'
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WINQ-EMU" \
@@ -143,7 +181,7 @@ SectionEnd
 
 ; ---- Descriptions ----
 LangString DESC_SecCore ${LANG_ENGLISH} "QEMU with enhanced WHPX host CPU passthrough, Venus Vulkan GPU acceleration, VA-API video decode, virtio-9p folder sharing, and all required libraries."
-LangString DESC_SecPath ${LANG_ENGLISH} "Add WINQ-EMU to your user PATH so you can run qemu-system-x86_64 from any terminal."
+LangString DESC_SecPath ${LANG_ENGLISH} "Add WINQ-EMU to your user PATH so you can run ${QEMU_SYSTEM} from any terminal."
 LangString DESC_SecShortcuts ${LANG_ENGLISH} "Create a Start Menu shortcut for launching VMs."
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN

@@ -52,6 +52,9 @@ echo.
 echo  Mouse:  Click to capture, Ctrl+Alt+G to release
 echo.
 
+REM Windows on ARM build ships qemu-system-aarch64 (aarch64 guests, UEFI)
+if exist "%~dp0bin\qemu-system-aarch64.exe" goto :arm64
+
 "%~dp0bin\qemu-system-x86_64.exe" ^
   -machine q35,accel=whpx ^
   -cpu host ^
@@ -64,7 +67,25 @@ echo.
   -usb -device usb-tablet ^
   -device virtio-net-pci,netdev=net0 ^
   -netdev user,id=net0,hostfwd=tcp::%SSH_PORT%-:22
+goto :done
 
+:arm64
+"%~dp0bin\qemu-system-aarch64.exe" ^
+  -L "%~dp0bin\share" ^
+  -machine virt,accel=whpx ^
+  -cpu host ^
+  -bios edk2-aarch64-code.fd ^
+  -m %VM_MEMORY% ^
+  -smp %VM_CPUS% ^
+  -drive file="%DISK_IMAGE%",format=qcow2,if=virtio ^
+  -device virtio-gpu-gl-pci,blob=on,hostmem=%GPU_HOSTMEM%,venus=on ^
+  -display sdl,gl=on ^
+  -device virtio-sound-pci ^
+  -device qemu-xhci -device usb-tablet ^
+  -device virtio-net-pci,netdev=net0 ^
+  -netdev user,id=net0,hostfwd=tcp::%SSH_PORT%-:22
+
+:done
 if errorlevel 1 (
     echo.
     echo  VM exited with an error. Common fixes:
