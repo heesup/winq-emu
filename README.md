@@ -115,11 +115,24 @@ Firefox and every non-Chromium consumer tested above work correctly.
      /r:'C:\Windows\Microsoft.NET\FrameworkArm64\v4.0.30319\System.Windows.Forms.dll' \
      /r:'C:\Windows\Microsoft.NET\FrameworkArm64\v4.0.30319\System.Drawing.dll' launcher\\WINQ-EMU.cs
    ```
-   (`MSYS2_ARG_CONV_EXCL='*'` stops MSYS2 from rewriting the `/flag` arguments as paths.) Note that the QEMU/virglrenderer side is still x86_64-only, so this covers the launcher only.
+   (`MSYS2_ARG_CONV_EXCL='*'` stops MSYS2 from rewriting the `/flag` arguments as paths.)
 4. **Collect DLLs** — copy all UCRT64 DLL dependencies into `installer\bin\`. Use `ldd qemu-system-x86_64.exe` from the UCRT64 shell to find them. Also copy `winq-emu.ico` into `installer\icons\` for the window icon.
 5. **Build the installer** (requires `mingw-w64-ucrt-x86_64-nsis`):
    ```bash
    cd installer && makensis installer.nsi
+   ```
+
+### Windows on ARM (ARM64)
+
+WHPX on ARM64 only runs aarch64 guests, so the ARM64 build uses `qemu-system-aarch64` on the `virt` machine with UEFI (edk2) — use an aarch64 Linux image. Build everything from the MSYS2 **CLANGARM64** shell:
+
+1. **virglrenderer** — `meson setup build-arm64 --prefix=/clangarm64 -Dvenus=true -Dvideo=true -Dtests=false && ninja -C build-arm64 install`
+2. **QEMU** — `./build-arm64.sh` in winq-emu-qemu (needs `pacman -S mingw-w64-clang-aarch64-qemu-common` for the edk2 firmware).
+3. **Launcher** — the Roslyn `csc.exe /platform:arm64` command above.
+4. **Stage and package**:
+   ```bash
+   QEMU_BUILD=../winq-emu-qemu/build-arm64 ./stage-arm64.sh
+   cd installer && makensis -DARM64 installer.nsi   # -> WINQ-EMU-Alpha10-ARM64-Setup.exe
    ```
 
 ## Status
